@@ -1,4 +1,4 @@
-const CACHE = 'mamchkin-v4';
+const CACHE = 'mamchkin-v5';
 
 const FILES = [
   './',
@@ -44,15 +44,4 @@ self.addEventListener('fetch', e => {
           caches.open(CACHE).then(h => h.put(r, c));
           return x;
         })
-        .catch(() => caches.match(r).then(m => m || caches.match('index.html')))
-    );
-  } else {
-    e.respondWith(
-      caches.match(r).then(m => m || fetch(r).then(x => {
-        const c = x.clone();
-        caches.open(CACHE).then(h => h.put(r, c));
-        return x;
-      }))
-    );
-  }
-});
+        .catch(() => caches.match(r).then(m => m || caches.match('index.html')
