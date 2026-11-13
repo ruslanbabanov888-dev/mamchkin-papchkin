@@ -26,6 +26,7 @@ const STATIC_DESTINATIONS = new Set([
   'script',
   'style',
   'font',
+  'audio',
   'worker'
 ]);
 
