@@ -220,17 +220,17 @@ return `<section class="home-shell">
 <div><span>Мамчкин</span><b>${S.pts[0]}</b><small>очков · Забота: ${activeBase}</small></div>
 <div><span>Папчкин</span><b>${S.pts[1]}</b><small>очков · Забота: ${activeBase}</small></div>
 </div>
-<button class="tabletop-continue" onclick="A.st()">${baseButton}　›</button>
+<button class="tabletop-continue" onclick="window.A.st()">${baseButton}　›</button>
 </div>
 </div>
 <div class="tabletop-foot">Ваш прогресс сохранён · Можно продолжить в любой момент</div>
 </section>
 <div class="mode-heading">Выбери свой режим</div>
 <div class="mode-grid">
-${mode('h-waiting.jpg','Режим ожидания','Пролог для будущих родителей',waitStatus,W.g?.on?'Продолжить':'Открыть',"A.dm('waiting')",W.g?.on?'live':'live')}
-${mode('h-team.jpg','Командный режим','Вся банда в деле','Готовится','Скоро',"A.dm('team')",'ready')}
-${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя','Готовится','Скоро',"A.dm('secret')",'ready')}
-${mode('h-memories.jpg','Режим сохранения','40 маленьких историй',doneMem===40?'Завершено':doingMem||doneMem?'В процессе':'Не начата','Открыть',"A.dm('mem')",doneMem||doingMem?'live':'')}
+${mode('h-waiting.jpg','Режим ожидания','Пролог для будущих родителей',waitStatus,W.g?.on?'Продолжить':'Открыть',"window.A.dm('waiting')",W.g?.on?'live':'live')}
+${mode('h-team.jpg','Командный режим','Вся банда в деле','Готовится','Скоро',"window.A.dm('team')",'ready')}
+${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя','Готовится','Скоро',"window.A.dm('secret')",'ready')}
+${mode('h-memories.jpg','Режим сохранения','40 маленьких историй',doneMem===40?'Завершено':doingMem||doneMem?'В процессе':'Не начата','Открыть',"window.A.dm('mem')",doneMem||doingMem?'live':'')}
 </div>
 <div class="home-note">Прогресс каждого режима хранится отдельно. Переключение между играми не смешивает очки и карточки.</div>
 <div class="home-extra">
@@ -301,6 +301,7 @@ const d=DECKS.find(x=>x[0]==dm),bk='<button class="b s sm" onclick="dm=null;ds=n
 return dm=='base'?bk+dv():dm=='mem'?bk+mv():dm=='waiting'?bk+wv():`${bk}<img class="hdr" src="${d[3]}" alt=""><h2>${E(d[1])}</h2><p class="mu">${E(d[2])}. Режим в разработке, скоро появится.</p>`}
 Object.assign(A,{dm(k){dm=k;go();if(k=='mem'&&!MM.intro)setTimeout(A.mi,50)},ms(i,k){MM.st[i]=k;msave();const y=scrollY;go();scrollTo(0,y)},mn(i,v){MM.nt[i]=v;msave()},
 mi(){MM.intro=1;msave();M(`<h2>Семейный архив</h2><p>Приложение не хранит фото, видео и аудио в облаке: всё остаётся в вашем телефоне. Здесь сохраняются только статусы карточек и ваши заметки, на этом устройстве.</p><p>Создайте на телефоне или компьютере папку <b>«Мамчкин и Папчкин — Режим сохранения»</b> и внутри 10 папок:</p><p style="white-space:pre-line">${MT.map((t,i)=>(i+1)+'. '+E(t)).join('\n')}</p><p class="mu">На каждой карточке указано, в какую папку класть материалы. Карточки можно выполнять в любом порядке. Если событие ещё не произошло, оставьте «В процессе». Ничего не нужно воспроизводить заново.</p><button class="b" onclick="M()">Понятно</button>`)}});
+window.A=A;
 const WR=`Зеркало ожидания|Лёгкая|60|Один игрок начинает показывать смешные движения, второй должен повторять их как зеркало. Можно гладить животик, изображать удивление, радость и другие эмоции.|Повторить не менее пяти движений без ошибок.
 Архитектор гнезда|Лёгкая|60|Предложи три идеи, как организовать пространство для будущего малыша и сделать его удобнее для родителей.|Назвать три конкретных и реалистичных предложения.
 Колыбельная для двоих|Лёгкая|30|Спой будущему Боссу колыбельную. Можно придумать собственную мелодию или использовать знакомую песню.|Исполнить песню до конца, не останавливаясь.
