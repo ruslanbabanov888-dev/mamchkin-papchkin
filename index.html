@@ -213,10 +213,10 @@ return `<section class="home-shell">
 </section>
 <div class="mode-heading">Выбери свой режим</div>
 <div class="mode-grid">
-${mode('h-waiting.jpg','Режим ожидания','Пролог для будущих родителей',waitStatus,W.g?.on?'Продолжить':'Открыть',\"A.dm('waiting')\",W.g?.on?'live':'live')}
-${mode('h-team.jpg','Командный режим','Вся банда в деле','Готовится','Скоро',\"A.dm('team')\",'ready')}
-${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя','Готовится','Скоро',\"A.dm('secret')\",'ready')}
-${mode('h-memories.jpg','Режим сохранения','40 маленьких историй',doneMem===40?'Завершено':doingMem||doneMem?'В процессе':'Не начата','Открыть',\"A.dm('mem')\",doneMem||doingMem?'live':'')}
+${mode('h-waiting.jpg','Режим ожидания','Пролог для будущих родителей',waitStatus,W.g?.on?'Продолжить':'Открыть',"A.dm('waiting')",W.g?.on?'live':'live')}
+${mode('h-team.jpg','Командный режим','Вся банда в деле','Готовится','Скоро',"A.dm('team')",'ready')}
+${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя','Готовится','Скоро',"A.dm('secret')",'ready')}
+${mode('h-memories.jpg','Режим сохранения','40 маленьких историй',doneMem===40?'Завершено':doingMem||doneMem?'В процессе':'Не начата','Открыть',"A.dm('mem')",doneMem||doingMem?'live':'')}
 </div>
 <div class="home-note">Прогресс каждого режима хранится отдельно. Переключение между играми не смешивает очки и карточки.</div>
 <div class="home-extra">
