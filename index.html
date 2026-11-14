@@ -153,7 +153,7 @@ nav .on{color:#79551f;font-weight:800}
   const META_KEY = 'mp2sync_meta';
   const CHUNK_BYTES = 2700;
   const state = {
-    available: !!(bridge && typeof bridge.send === 'function'),
+    available: (() => { try { return !!(bridge && typeof bridge.send === 'function' && typeof bridge.isWebView === 'function' && bridge.isWebView()); } catch (error) { return false; } })(),
     initialized: false,
     syncing: false,
     syncStatus: 'Локальное сохранение',
