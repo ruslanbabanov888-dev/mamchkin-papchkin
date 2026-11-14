@@ -1,0 +1,94 @@
+name: Build phone preview artifact
+
+on:
+  push:
+    branches:
+      - backup/pre-audit-2026-11-12
+    paths:
+      - 'index.html'
+      - 'sw.js'
+      - 'manifest.json'
+      - 'emblem.png'
+      - 'h-*.jpg'
+      - 'icon-*.png'
+      - '.github/workflows/phone-preview.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Validate and package phone preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out backup branch
+        uses: actions/checkout@v4
+        with:
+          ref: backup/pre-audit-2026-11-12
+
+      - name: Validate app files and JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in index.html sw.js manifest.json emblem.png h-waiting.jpg h-team.jpg h-secret.jpg h-memories.jpg icon-192.png icon-512.png icon-maskable-512.png; do
+            test -s "$file" || { echo "Missing or empty file: $file"; exit 1; }
+          done
+          node --check sw.js
+          node <<'NODE'
+          const fs = require('fs');
+          const html = fs.readFileSync('index.html', 'utf8');
+          const scripts = [...html.matchAll(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/gi)];
+          if (!scripts.length) throw new Error('No inline JavaScript block found');
+          scripts.forEach((match, index) => new Function(match[1]));
+          JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          console.log('Inline JavaScript syntax: OK');
+          console.log('Manifest JSON: OK');
+          NODE
+
+      - name: Add phone testing instructions
+        shell: bash
+        run: |
+          cat > PHONE-TESTING.txt <<'TXT'
+          МАМЧКИН И ПАПЧКИН — ТЕСТОВАЯ СБОРКА ДЛЯ ТЕЛЕФОНА
+          Источник: backup/pre-audit-2026-11-12
+          Commit: 506fa40de3e4a3267bcf6f9f0a27b3883733ed15
+
+          КАК ОТКРЫТЬ
+          1. Скачайте этот artifact ZIP из GitHub Actions.
+          2. Распакуйте ZIP в отдельную папку на телефоне.
+          3. Откройте index.html в браузере (на Android — через файловый менеджер и Chrome).
+          4. Для этой локальной копии Service Worker не включается; проверка офлайн-установки/PWA здесь не проводится.
+
+          ВАЖНО
+          - Это локальная тестовая копия, не опубликованный сайт.
+          - Данные игры сохраняются локально в браузере телефона.
+          - Не используйте её как основную игровую копию: это тест новой главной страницы.
+          - На iPhone запуск локального HTML может быть ограничен браузером; если файл не открывается как приложение, не меняйте настройки сайта — понадобится отдельный способ локального HTTP-просмотра.
+
+          ЧТО ПРОВЕРИТЬ
+          - На главной видны все пять режимов.
+          - Основной релиз и Режим ожидания показывают свои отдельные очки и состояние.
+          - Командный режим и Секретный уровень помечены как «Готовится», кнопки недоступны.
+          - Режим сохранения показывает отдельный прогресс историй.
+          - Переходы «Начать игру», «Продолжить», «Открыть» и возврат на главную.
+          TXT
+
+      - name: Upload phone preview package
+        uses: actions/upload-artifact@v4
+        with:
+          name: mamchkin-phone-preview
+          path: |
+            index.html
+            sw.js
+            manifest.json
+            emblem.png
+            h-waiting.jpg
+            h-team.jpg
+            h-secret.jpg
+            h-memories.jpg
+            icon-192.png
+            icon-512.png
+            icon-maskable-512.png
+            PHONE-TESTING.txt
+          if-no-files-found: error
+          retention-days: 7
