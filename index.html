@@ -193,7 +193,7 @@ nav .on{color:#79551f;font-weight:800}
     });
     return new TextDecoder().decode(new Uint8Array(bytes));
   };
-  const chunkKey = (key, rev, index) => 'mp2sync_' + key + '_' + rev + '_' + index;
+  const chunkKey = (key, slot, index) => 'mp2sync_' + key + '_' + slot + '_' + index;
   const loadRemote = async () => {
     const metaValue = (await readMany([META_KEY]))[META_KEY];
     if (!metaValue) return null;
@@ -201,14 +201,14 @@ nav .on{color:#79551f;font-weight:800}
     if (!meta || meta.v !== 1 || !meta.keys) return null;
     const requests = [];
     Object.entries(meta.keys).forEach(([key, info]) => {
-      for (let i=0;i<info.count;i++) requests.push([key,info.rev,i,chunkKey(key,info.rev,i)]);
+      for (let i=0;i<info.count;i++) requests.push([key,info.slot||0,i,chunkKey(key,info.slot||0,i)]);
     });
     const raw = await readMany(requests.map(x=>x[3]));
     const values = {};
     Object.entries(meta.keys).forEach(([key, info]) => {
       const chunks = [];
       for (let i=0;i<info.count;i++) {
-        const value = raw[chunkKey(key,info.rev,i)];
+        const value = raw[chunkKey(key,info.slot||0,i)];
         if (typeof value !== 'string' || !value) return;
         chunks.push(value);
       }
@@ -222,20 +222,16 @@ nav .on{color:#79551f;font-weight:800}
       rev: revision,
       keys: Object.assign({}, baseMeta && baseMeta.keys || {})
     };
-    const old = [];
     for (const [key,value] of Object.entries(values)) {
       const chunks = encodeChunks(value);
       const previous = next.keys[key];
+      const slot = previous ? 1-(previous.slot||0) : 0;
       for (let i=0;i<chunks.length;i++) {
-        await send('VKWebAppStorageSet', { key: chunkKey(key,revision,i), value: chunks[i] });
+        await send('VKWebAppStorageSet', { key: chunkKey(key,slot,i), value: chunks[i] });
       }
-      next.keys[key] = { rev: revision, count: chunks.length };
-      if (previous) for (let i=0;i<previous.count;i++) old.push(chunkKey(key,previous.rev,i));
+      next.keys[key] = { rev: revision, count: chunks.length, slot };
     }
     await send('VKWebAppStorageSet', { key: META_KEY, value: JSON.stringify(next) });
-    for (const key of old) {
-      try { await send('VKWebAppStorageSet', { key, value: '' }); } catch (error) { /* старые блоки не используются */ }
-    }
     state.remoteMeta = next;
     state.lastSyncAt = Date.now();
     state.syncError = null;
