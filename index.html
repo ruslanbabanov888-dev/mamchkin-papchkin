@@ -146,29 +146,197 @@ nav .on{color:#79551f;font-weight:800}
 </style></head><body><svg width="0" height="0" style="position:absolute"><defs><pattern id="dm" width="26" height="44" patternUnits="userSpaceOnUse"><path d="M13 0L26 22 13 44 0 22ZM13 9L20 22 13 35 6 22Z" fill="none" stroke="#cf9a52" stroke-width=".6" opacity=".6"/></pattern><image id="emb" width="600" height="611" href="emblem.png"/><symbol id="lion" viewBox="0 0 300 336"><use href="#emb"/></symbol><symbol id="lioness" viewBox="300 0 300 336"><use href="#emb"/></symbol></defs></svg><div id="app"><header><svg class="em" viewBox="0 0 100 100"><use href="#lion"/></svg><h1>Мамчкин и Папчкин</h1><svg class="em" viewBox="0 0 100 100"><use href="#lioness"/></svg><button class="gear" id="sb" aria-label="Звук" onclick="A.mt()">🔊</button><button class="gear" style="margin-left:0" aria-label="Настройки" onclick="A.set()">⚙</button></header><div id="v"></div></div><nav id="nav"></nav><div id="m"></div>
 <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <script>
-/* VK Bridge: необязательная интеграция. В обычном браузере игра продолжает работать автономно. */
+/* VK Bridge: запуск, пользовательское облачное сохранение и рекламные методы. */
 (function(){
   const bridge = window.vkBridge;
-  const state = { available: !!(bridge && typeof bridge.send === 'function'), initialized: false, error: null };
+  const KEYS = ['mp2','mp2_wait','mp2_mem','mp2_team','mp2_secret','mp2snd'];
+  const META_KEY = 'mp2sync_meta';
+  const CHUNK_BYTES = 2700;
+  const state = {
+    available: !!(bridge && typeof bridge.send === 'function'),
+    initialized: false,
+    syncing: false,
+    syncStatus: 'Локальное сохранение',
+    syncError: null,
+    error: null,
+    lastSyncAt: null,
+    remoteMeta: null
+  };
   const send = async (method, params) => {
     if (!state.available) throw new Error('VK Bridge недоступен. Открой приложение внутри VK.');
     return bridge.send(method, params || {});
   };
+  const readMany = async keys => {
+    const values = {};
+    for (let i=0;i<keys.length;i+=10) {
+      const response = await send('VKWebAppStorageGet', { keys: keys.slice(i,i+10) });
+      (response.keys || []).forEach(item => { values[item.key] = item.value || ''; });
+    }
+    return values;
+  };
+  const encodeChunks = value => {
+    const bytes = new TextEncoder().encode(value);
+    const chunks = [];
+    for (let i=0;i<bytes.length;i+=CHUNK_BYTES) {
+      const part = bytes.subarray(i, i+CHUNK_BYTES);
+      let binary = '';
+      for (let j=0;j<part.length;j++) binary += String.fromCharCode(part[j]);
+      chunks.push(btoa(binary));
+    }
+    return chunks.length ? chunks : [''];
+  };
+  const decodeChunks = chunks => {
+    const bytes = [];
+    chunks.forEach(chunk => {
+      const binary = atob(chunk);
+      for (let i=0;i<binary.length;i++) bytes.push(binary.charCodeAt(i));
+    });
+    return new TextDecoder().decode(new Uint8Array(bytes));
+  };
+  const chunkKey = (key, rev, index) => 'mp2sync_' + key + '_' + rev + '_' + index;
+  const loadRemote = async () => {
+    const metaValue = (await readMany([META_KEY]))[META_KEY];
+    if (!metaValue) return null;
+    const meta = JSON.parse(metaValue);
+    if (!meta || meta.v !== 1 || !meta.keys) return null;
+    const requests = [];
+    Object.entries(meta.keys).forEach(([key, info]) => {
+      for (let i=0;i<info.count;i++) requests.push([key,info.rev,i,chunkKey(key,info.rev,i)]);
+    });
+    const raw = await readMany(requests.map(x=>x[3]));
+    const values = {};
+    Object.entries(meta.keys).forEach(([key, info]) => {
+      const chunks = [];
+      for (let i=0;i<info.count;i++) {
+        const value = raw[chunkKey(key,info.rev,i)];
+        if (typeof value !== 'string' || !value) return;
+        chunks.push(value);
+      }
+      try { values[key] = decodeChunks(chunks); } catch (error) { /* повреждённый блок не заменяет локальные данные */ }
+    });
+    return { meta, values };
+  };
+  const writeRemote = async (values, baseMeta, revision) => {
+    const next = {
+      v: 1,
+      rev: revision,
+      keys: Object.assign({}, baseMeta && baseMeta.keys || {})
+    };
+    const old = [];
+    for (const [key,value] of Object.entries(values)) {
+      const chunks = encodeChunks(value);
+      const previous = next.keys[key];
+      for (let i=0;i<chunks.length;i++) {
+        await send('VKWebAppStorageSet', { key: chunkKey(key,revision,i), value: chunks[i] });
+      }
+      next.keys[key] = { rev: revision, count: chunks.length };
+      if (previous) for (let i=0;i<previous.count;i++) old.push(chunkKey(key,previous.rev,i));
+    }
+    await send('VKWebAppStorageSet', { key: META_KEY, value: JSON.stringify(next) });
+    for (const key of old) {
+      try { await send('VKWebAppStorageSet', { key, value: '' }); } catch (error) { /* старые блоки не используются */ }
+    }
+    state.remoteMeta = next;
+    state.lastSyncAt = Date.now();
+    state.syncError = null;
+  };
+  const localRevision = () => Number(localStorage.getItem('mp2_sync_rev') || 0) || 0;
+  const boot = async () => {
+    if (!state.available) return false;
+    state.syncing = true;
+    state.syncStatus = 'Подключение к VK…';
+    try {
+      await send('VKWebAppInit');
+      state.initialized = true;
+      state.error = null;
+      state.syncStatus = 'Проверка сохранений…';
+      const remote = await loadRemote();
+      state.remoteMeta = remote && remote.meta || null;
+      const localRev = localRevision();
+      const remoteRev = remote && Number(remote.meta.rev) || 0;
+      if (remote && remoteRev > localRev) {
+        Object.entries(remote.values).forEach(([key,value]) => {
+          if (KEYS.includes(key)) localStorage.setItem(key,value);
+        });
+        localStorage.setItem('mp2_sync_rev',String(remoteRev));
+      } else if (!remote || localRev > remoteRev) {
+        const local = {};
+        KEYS.forEach(key => {
+          const value = localStorage.getItem(key);
+          if (value !== null) local[key] = value;
+        });
+        if (Object.keys(local).length) {
+          const rev = Math.max(localRev,remoteRev)+1;
+          localStorage.setItem('mp2_sync_rev',String(rev));
+          await writeRemote(local,remote && remote.meta,rev);
+        }
+      }
+      state.syncStatus = 'Сохранения синхронизированы с VK';
+      return true;
+    } catch (error) {
+      state.error = String(error && error.message || error);
+      state.syncError = state.error;
+      state.syncStatus = 'VK недоступен — используем локальные сохранения';
+      return false;
+    } finally {
+      state.syncing = false;
+    }
+  };
+  let pending = new Set(), syncTimer = null, flushPromise = null;
+  const flush = async () => {
+    if (!state.initialized || !pending.size) return flushPromise || false;
+    if (flushPromise) return flushPromise;
+    const keys = Array.from(pending);
+    pending.clear();
+    const values = {};
+    keys.forEach(key => {
+      const value = localStorage.getItem(key);
+      if (value !== null) values[key] = value;
+    });
+    if (!Object.keys(values).length) return false;
+    const revision = Math.max(localRevision(),Number(state.remoteMeta && state.remoteMeta.rev)||0)+1;
+    localStorage.setItem('mp2_sync_rev',String(revision));
+    state.syncing = true;
+    state.syncStatus = 'Синхронизация с VK…';
+    flushPromise = writeRemote(values,state.remoteMeta,revision).then(() => {
+      state.syncStatus = 'Сохранения синхронизированы с VK';
+      return true;
+    }).catch(error => {
+      state.syncError = String(error && error.message || error);
+      state.syncStatus = 'Не удалось синхронизировать — данные остались на устройстве';
+      keys.forEach(key => pending.add(key));
+      return false;
+    }).finally(() => {
+      state.syncing = false;
+      flushPromise = null;
+      if (pending.size) scheduleFlush();
+    });
+    return flushPromise;
+  };
+  function scheduleFlush() {
+    clearTimeout(syncTimer);
+    syncTimer = setTimeout(flush,800);
+  }
+  const installPersistence = () => {
+    if (!state.initialized || window.__MP_VK_STORAGE_PATCHED) return;
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key,value) {
+      originalSetItem.call(this,key,value);
+      if (this === window.localStorage && KEYS.includes(String(key))) {
+        pending.add(String(key));
+        scheduleFlush();
+      }
+    };
+    window.__MP_VK_STORAGE_PATCHED = true;
+    window.addEventListener('pagehide',() => { if(pending.size) flush(); });
+  };
   const api = {
     state,
     isAvailable: () => state.available,
-    init: async () => {
-      if (!state.available) return false;
-      try {
-        await send('VKWebAppInit');
-        state.initialized = true;
-        state.error = null;
-        return true;
-      } catch (error) {
-        state.error = String(error && error.message || error);
-        return false;
-      }
-    },
+    init: boot,
+    boot,
+    installPersistence,
+    flush,
     getUserInfo: () => send('VKWebAppGetUserInfo'),
     checkRewarded: async () => {
       const result = await send('VKWebAppCheckNativeAds', { ad_format: 'reward' });
@@ -183,10 +351,9 @@ nav .on{color:#79551f;font-weight:800}
       return !!result.result;
     },
     storageGet: async keys => send('VKWebAppStorageGet', { keys: Array.isArray(keys) ? keys : [keys] }),
-    storageSet: async (key, value) => send('VKWebAppStorageSet', { key, value: String(value) })
+    storageSet: async (key,value) => send('VKWebAppStorageSet', { key, value: String(value) })
   };
   window.MP_VK = api;
-  if (state.available) api.init();
 })();
 </script>
 <script>
@@ -310,8 +477,8 @@ return `<section class="home-shell">
 <div class="mode-heading">Выбери свой режим</div>
 <div class="mode-grid">
 ${mode('h-waiting.jpg','Режим ожидания','Пролог для будущих родителей',waitStatus,W.g?.on?'Продолжить':'Открыть',"window.A.dm('waiting')",W.g?.on?'live':'live')}
-${mode('h-team.jpg','Командный режим','Вся банда в деле',TM.players.length+' участников','Играть',"window.A.dm('team')",'live')}
-${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя',SC.round?'В игре':'Для двоих','Открыть',"window.A.dm('secret')",'live')}
+${mode('h-team.jpg','Командный режим','Вся банда в деле','Готовится','Скоро',"",'ready')}
+${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя','Готовится','Скоро',"",'ready')}
 ${mode('h-memories.jpg','Режим сохранения','40 маленьких историй',doneMem===40?'Завершено':doingMem||doneMem?'В процессе':'Не начата','Открыть',"window.A.dm('mem')",doneMem||doingMem?'live':'')}
 </div>
 <div class="home-note">Прогресс каждого режима хранится отдельно. Переключение между играми не смешивает очки и карточки.</div>
@@ -373,7 +540,7 @@ const MT=['Наша история','Первые моменты','Малень�
 let MM;try{MM=Object.assign({st:{},nt:{},intro:0},JSON.parse(localStorage.getItem('mp2_mem')))}catch(e){MM={st:{},nt:{},intro:0}}
 if(!MM.st||typeof MM.st!='object')MM.st={};if(!MM.nt||typeof MM.nt!='object')MM.nt={};
 const msave=()=>{try{localStorage.setItem('mp2_mem',JSON.stringify(MM))}catch(e){}};let dm=null,memSection=-1,memPile='new',memCard=0;
-const DECKS=[['base','Мамчкин и Папчкин','Основной релиз','emblem.png'],['waiting','Мамчкин и Папчкин: Уровень «Ожидание»','Пролог для будущих родителей','h-waiting.jpg'],['team','Мамчкин и Папчкин: Командный режим','Вся банда в деле','h-team.jpg'],['secret','Мамчкин и Папчкин: Секретный уровень','Только для двоих после отбоя','h-secret.jpg'],['mem','Мамчкин и Папчкин: Режим сохранения','Семейные ритуалы и якоря памяти','h-memories.jpg']],READY={base:1,waiting:1,team:1,secret:1,mem:1};
+const DECKS=[['base','Мамчкин и Папчкин','Основной релиз','emblem.png'],['waiting','Мамчкин и Папчкин: Уровень «Ожидание»','Пролог для будущих родителей','h-waiting.jpg'],['team','Мамчкин и Папчкин: Командный режим','Вся банда в деле','h-team.jpg'],['secret','Мамчкин и Папчкин: Секретный уровень','Только для двоих после отбоя','h-secret.jpg'],['mem','Мамчкин и Папчкин: Режим сохранения','Семейные ритуалы и якоря памяти','h-memories.jpg']],READY={base:1,waiting:1,team:0,secret:0,mem:1};
 function mv(){
 const counts=()=>{const z={new:0,progress:0,done:0};for(let i=1;i<=40;i++){const st=MM.st[i]|0;z[st===2?'done':st===1?'progress':'new']++}return z};
 const sectionCards=idx=>Array.from({length:4},(_,j)=>idx*4+j+1);
@@ -400,10 +567,11 @@ const next=sectionCards(memSection).find(i=>!(MM.st[i]|0));
 const random=ids.length?ids[Math.floor(Math.random()*ids.length)]:0;
 return head+chooseBack()+'<div class="mem-pile-toolbar"><button class="b s sm" onclick="A.memPile(\'choose\')">← Три колоды</button><h3>'+pileNames[memPile]+'</h3><span>'+ids.length+' / 4</span></div>'+(memPile==='new'?'<div class="mem-open-controls"><button class="b" '+(next?'':'disabled')+' onclick="A.memOpen('+(next||0)+')">Открыть следующую по порядку</button><button class="b s" '+(ids.length?'':'disabled')+' onclick="A.memOpen('+(random||0)+')">Открыть случайную</button></div>':'')+'<div class="mem-cards-grid">'+(ids.length?ids.map(cardBack).join(''):'<div class="mem-empty">В этой колоде пока нет карточек.</div>')+'</div>';
 }
-function dv2(){if(!dm)return `<h2>Колоды</h2>${DECKS.map(d=>`<div class="p dkc" onclick="A.dm('${d[0]}')"><img class="dki" src="${d[3]}" alt=""><div><b>${d[1]}</b><br><small>${d[2]}</small>${READY[d[0]]?'':'<br><span class="tg">Скоро</span>'}</div></div>`).join('')}`;
+function dv2(){if(!dm)return `<h2>Колоды</h2>${DECKS.map(d=>`<div class="p dkc" ${READY[d[0]]?`onclick="A.dm('${d[0]}')`:'aria-disabled="true" style="opacity:.62;cursor:not-allowed"'}><img class="dki" src="${d[3]}" alt=""><div><b>${d[1]}</b><br><small>${d[2]}</small>${READY[d[0]]?'':'<br><span class="tg">Готовится</span>'}</div></div>`).join('')}`;
+if(!READY[dm]){const d=DECKS.find(x=>x[0]==dm);return `<button class="b s sm" onclick="dm=null;go()">← Все колоды</button><img class="hdr" src="${d[3]}" alt=""><h2>${E(d[1])}</h2><p class="mu">Это дополнение ещё готовится. Оно появится здесь после завершения разработки.</p>`}
 const d=DECKS.find(x=>x[0]==dm),bk='<button class="b s sm" onclick="dm=null;ds=null;go()">← Все колоды</button>';
 return dm=='base'?bk+dv():dm=='mem'?bk+mv():dm=='waiting'?bk+wv():dm=='team'?bk+tmRender('team'):dm=='secret'?bk+tmRender('secret'):`${bk}<img class="hdr" src="${d[3]}" alt=""><h2>${E(d[1])}</h2><p class="mu">${E(d[2])}. Режим в разработке, скоро появится.</p>`}
-Object.assign(A,{dm(k){dm=k;if(k=='team'||k=='secret')tmPane='game';if(k=='mem'){memSection=-1;memPile='choose';memCard=0}tab='decks';go();if(k=='mem'&&!MM.intro)setTimeout(A.mi,50)},memSections(){memSection=-1;memPile='choose';memCard=0;go()},memSection(i){memSection=i;memPile='choose';memCard=0;go()},memPile(k){memPile=k;memCard=0;go()},memOpen(i){if(!i)return;if(!(MM.st[i]|0))MM.st[i]=1;memCard=i;msave();go()},memCloseCard(){memCard=0;go()},memStatus(i,k){MM.st[i]=k;memCard=0;memPile=k===0?'new':k===2?'done':'progress';msave();go()},ms(i,k){MM.st[i]=k;msave();const y=scrollY;go();scrollTo(0,y)},mn(i,v){MM.nt[i]=v;msave()},
+Object.assign(A,{dm(k){if(!READY[k]){toast('Это дополнение пока готовится');return}dm=k;if(k=='team'||k=='secret')tmPane='game';if(k=='mem'){memSection=-1;memPile='choose';memCard=0}tab='decks';go();if(k=='mem'&&!MM.intro)setTimeout(A.mi,50)},memSections(){memSection=-1;memPile='choose';memCard=0;go()},memSection(i){memSection=i;memPile='choose';memCard=0;go()},memPile(k){memPile=k;memCard=0;go()},memOpen(i){if(!i)return;if(!(MM.st[i]|0))MM.st[i]=1;memCard=i;msave();go()},memCloseCard(){memCard=0;go()},memStatus(i,k){MM.st[i]=k;memCard=0;memPile=k===0?'new':k===2?'done':'progress';msave();go()},ms(i,k){MM.st[i]=k;msave();const y=scrollY;go();scrollTo(0,y)},mn(i,v){MM.nt[i]=v;msave()},
 mi(){MM.intro=1;msave();M(`<h2>Семейный архив</h2><p>Приложение не хранит фото, видео и аудио в облаке: всё остаётся в вашем телефоне. Здесь сохраняются только статусы карточек и ваши заметки, на этом устройстве.</p><p>Создайте на телефоне или компьютере папку <b>«Мамчкин и Папчкин — Режим сохранения»</b> и внутри 10 папок:</p><p style="white-space:pre-line">${MT.map((t,i)=>(i+1)+'. '+E(t)).join('\n')}</p><p class="mu">На каждой карточке указано, в какую папку класть материалы. Карточки можно выполнять в любом порядке. Если событие ещё не произошло, оставьте «В процессе». Ничего не нужно воспроизводить заново.</p><button class="b" onclick="M()">Понятно</button>`)}});
 window.A=A;
 const WR=`Зеркало ожидания|Лёгкая|60|Один игрок начинает показывать смешные движения, второй должен повторять их как зеркало. Можно гладить животик, изображать удивление, радость и другие эмоции.|Повторить не менее пяти движений без ошибок.
@@ -626,9 +794,23 @@ if(!g.flip)return nav+'<h2>'+(team?'Исполнитель: '+E(x.players[g.w].n
 return nav+'<h2>'+(team?'Исполнитель: '+E(x.players[g.w].name):'Ходит: '+E(x.players[g.w]))+'</h2><div class="card fl"><i>ИСПЫТАНИЕ №'+(g.c+1)+'</i><h3>'+E(a[0])+'</h3><p>'+E(a[1])+'</p><p class="gd">Условие успеха: '+E(a[2])+'</p>'+(+a[3]?'<div class="tm" id="tmclock">'+(g.tm==1?fmt(Math.max(0,Math.ceil((g.end-Date.now())/1000))):fmt(+a[3]))+'</div><small>'+(g.tm==1?'ТАЙМЕР ЗАПУЩЕН':'ЗАПУСК ВРУЧНУЮ')+'</small>':'')+'</div>'+(+a[3]&&!g.tm?'<button class="b" onclick="tmRun(\''+k+'\')">ЗАПУСТИТЬ ТАЙМЕР</button>':'')+'<div class="r2"><button class="b"  onclick="tmResult(\''+k+'\',1)">✓ Успех</button><button class="b c"  onclick="tmResult(\''+k+'\',0)">✕ Неудача</button></div>'+tools}
 
 function go(){clearInterval(tim);if(tab!='game'||!S.g||S.g.done||S.g.tm!=1)mstop();$('#v').innerHTML=tab=='game'&&S.g?gv():({home:hv,game:hv,decks:dv2,tickets:tv,hist:iv,rules:rv})[tab]();$('#nav').innerHTML=[['home','🏠','Главная'],['decks','🃏','Колоды'],['tickets','🎫','Билеты'],['hist','📖','История'],['rules','📜','Правила']].map(([k,i,n])=>`<button class="${tab==k||(tab=='game'&&k=='home')?'on':''}" onclick="tab='${k}';go()"><b>${i}</b>${n}</button>`).join('');tick();wtick();tmResume();sync();{const b=$('#sb');if(b)b.textContent=AU.mute?'🔇':'🔊'}if(S.g)S.g.na=0;scrollTo(0,0)}
-addEventListener('pagehide',()=>{mstop();save()});document.addEventListener('visibilitychange',()=>{if(document.hidden){mstop();if(AU.ctx){try{AU.ctx.suspend()}catch(e){}}return}if(AU.ctx){try{AU.ctx.resume()}catch(e){}}tick()});document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))sfx('click')});go();
-if(!S.ob)M(`<h2>Добро пожаловать</h2><p>Успех приносит очко и награду, неудача — карту заботы. Билеты хранят награды и задания, откуп и способности помогают договориться. Комфорт малыша всегда важнее игры.</p><button class="b" onclick="S.ob=1;save();M()">Начать</button><button class="b s" onclick="S.ob=1;save();M()">Пропустить</button>`);
-else if(S.g?.on&&S.g.c)M(`<h2>🦁 Босс вернулся!</h2><p>Мы сохранили твою игру. Продолжаем с того места, где остановились?</p><button class="b" onclick="AU.go=1;M();tab='game';go()">Продолжить игру</button><button class="b s" onclick="M()">На главную</button>`);
-
+function reloadSavedState(){
+  try{S=Object.assign(DEF(),JSON.parse(localStorage.getItem(KEY)||'{}'))}catch(e){S=DEF()}
+  {const d=DEF();['tk','ab','hist','ach','comps'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=d[k]});if(!S.dk||['c','k','r'].some(k=>!Array.isArray(S.dk[k])))S.dk=d.dk;['st','use'].forEach(k=>{if(!S[k]||typeof S[k]!='object')S[k]=d[k]});if(!Array.isArray(S.pts)||S.pts.length!=2)S.pts=[0,0];if(!Array.isArray(S.n)||S.n.length!=2)S.n=d.n;if(!Array.isArray(S.sd)||S.sd.length!=2)S.sd=d.sd;S.days=Math.min(14,Math.max(1,+S.days||7));S.seq=Math.max(S.seq|0,1+Math.max(0,...S.tk.map(t=>t.id|0),...S.ab.map(t=>t.id|0)));if(S.g){S.g.na=0;if(S.g.c&&!card(S.g.c)){S.g.c=null;S.g.fl=0;S.g.tm=0}}}
+  try{W=Object.assign(WD(),JSON.parse(localStorage.getItem('mp2_wait')||'{}'))}catch(e){W=WD()}
+  {const d=WD();if(!W.dk||['c','k','r'].some(k=>!Array.isArray(W.dk[k])))W.dk=d.dk;['tk','ab','hist'].forEach(k=>{if(!Array.isArray(W[k]))W[k]=d[k]});if(!Array.isArray(W.pts)||W.pts.length!=2)W.pts=[0,0];W.seq=Math.max(W.seq|0,1+Math.max(0,...W.tk.map(t=>t.id|0),...W.ab.map(t=>t.id|0)));if(W.g){W.g.na=0;if(W.g.c&&!WC(W.g.c)){W.g.c=null;W.g.fl=0;W.g.tm=0}}}
+  try{MM=Object.assign({st:{},nt:{},intro:0},JSON.parse(localStorage.getItem('mp2_mem')||'{}'))}catch(e){MM={st:{},nt:{},intro:0}}
+  if(!MM.st||typeof MM.st!='object')MM.st={};if(!MM.nt||typeof MM.nt!='object')MM.nt={};
+  TM=tmRead('team',tmDefaults);SC=tmRead('secret',scDefaults);
+  try{Object.assign(AU,JSON.parse(localStorage.getItem('mp2snd')||'{}'))}catch(e){}
+}
+addEventListener('pagehide',()=>{mstop();save()});document.addEventListener('visibilitychange',()=>{if(document.hidden){mstop();if(AU.ctx){try{AU.ctx.suspend()}catch(e){}}return}if(AU.ctx){try{AU.ctx.resume()}catch(e){}}tick()});document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))sfx('click')});
+MP_VK.boot().finally(()=>{
+  reloadSavedState();
+  MP_VK.installPersistence();
+  go();
+  if(!S.ob)M(`<h2>Добро пожаловать</h2><p>Успех приносит очко и награду, неудача — карту заботы. Билеты хранят награды и задания, откуп и способности помогают договориться. Комфорт малыша всегда важнее игры.</p><button class="b" onclick="S.ob=1;save();M()">Начать</button><button class="b s" onclick="S.ob=1;save();M()">Пропустить</button>`);
+  else if(S.g?.on&&S.g.c)M(`<h2>🦁 Босс вернулся!</h2><p>Мы сохранили твою игру. Продолжаем с того места, где остановились?</p><button class="b" onclick="AU.go=1;M();tab='game';go()">Продолжить игру</button><button class="b s" onclick="M()">На главную</button>`);
+});
 if('serviceWorker'in navigator&&location.protocol.startsWith('http'))addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 </script></body></html>
