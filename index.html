@@ -250,7 +250,8 @@ nav .on{color:#79551f;font-weight:800}
       state.remoteMeta = remote && remote.meta || null;
       const localRev = localRevision();
       const remoteRev = remote && Number(remote.meta.rev) || 0;
-      if (remote && remoteRev > localRev) {
+      const hasLocal = KEYS.some(key => localStorage.getItem(key) !== null);
+      if (remote && (remoteRev > localRev || !hasLocal)) {
         Object.entries(remote.values).forEach(([key,value]) => {
           if (KEYS.includes(key)) localStorage.setItem(key,value);
         });
