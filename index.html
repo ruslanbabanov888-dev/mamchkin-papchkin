@@ -474,8 +474,8 @@ return `<section class="home-shell">
 <div class="mode-heading">Выбери свой режим</div>
 <div class="mode-grid">
 ${mode('h-waiting.jpg','Режим ожидания','Пролог для будущих родителей',waitStatus,W.g?.on?'Продолжить':'Открыть',"window.A.dm('waiting')",W.g?.on?'live':'live')}
-${mode('h-team.jpg','Командный режим','Вся банда в деле','Готовится','Скоро',"",'ready')}
-${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя','Готовится','Скоро',"",'ready')}
+${mode('h-team.jpg','Командный режим','Вся банда в деле',TM.round&&!TM.round.done?'В игре':'Не начата',TM.round&&!TM.round.done?'Продолжить':'Открыть',"window.A.dm('team')",'live')}
+${mode('h-secret.jpg','Секретный уровень','Только для двоих после отбоя',SC.round&&!SC.round.done?'В игре':'Не начата',SC.round&&!SC.round.done?'Продолжить':'Открыть',"window.A.dm('secret')",'live')}
 ${mode('h-memories.jpg','Режим сохранения','40 маленьких историй',doneMem===40?'Завершено':doingMem||doneMem?'В процессе':'Не начата','Открыть',"window.A.dm('mem')",doneMem||doingMem?'live':'')}
 </div>
 <div class="home-note">Прогресс каждого режима хранится отдельно. Переключение между играми не смешивает очки и карточки.</div>
@@ -537,7 +537,7 @@ const MT=['Наша история','Первые моменты','Малень�
 let MM;try{MM=Object.assign({st:{},nt:{},intro:0},JSON.parse(localStorage.getItem('mp2_mem')))}catch(e){MM={st:{},nt:{},intro:0}}
 if(!MM.st||typeof MM.st!='object')MM.st={};if(!MM.nt||typeof MM.nt!='object')MM.nt={};
 const msave=()=>{try{localStorage.setItem('mp2_mem',JSON.stringify(MM))}catch(e){}};let dm=null,memSection=-1,memPile='new',memCard=0;
-const DECKS=[['base','Мамчкин и Папчкин','Основной релиз','emblem.png'],['waiting','Мамчкин и Папчкин: Уровень «Ожидание»','Пролог для будущих родителей','h-waiting.jpg'],['team','Мамчкин и Папчкин: Командный режим','Вся банда в деле','h-team.jpg'],['secret','Мамчкин и Папчкин: Секретный уровень','Только для двоих после отбоя','h-secret.jpg'],['mem','Мамчкин и Папчкин: Режим сохранения','Семейные ритуалы и якоря памяти','h-memories.jpg']],READY={base:1,waiting:1,team:0,secret:0,mem:1};
+const DECKS=[['base','Мамчкин и Папчкин','Основной релиз','emblem.png'],['waiting','Мамчкин и Папчкин: Уровень «Ожидание»','Пролог для будущих родителей','h-waiting.jpg'],['team','Мамчкин и Папчкин: Командный режим','Вся банда в деле','h-team.jpg'],['secret','Мамчкин и Папчкин: Секретный уровень','Только для двоих после отбоя','h-secret.jpg'],['mem','Мамчкин и Папчкин: Режим сохранения','Семейные ритуалы и якоря памяти','h-memories.jpg']],READY={base:1,waiting:1,team:1,secret:1,mem:1};
 function mv(){
 const counts=()=>{const z={new:0,progress:0,done:0};for(let i=1;i<=40;i++){const st=MM.st[i]|0;z[st===2?'done':st===1?'progress':'new']++}return z};
 const sectionCards=idx=>Array.from({length:4},(_,j)=>idx*4+j+1);
