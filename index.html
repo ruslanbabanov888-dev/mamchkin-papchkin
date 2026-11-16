@@ -476,7 +476,7 @@ async rstConfirm(){
     if (window.MP_VK && window.MP_VK.state.available) {
       await window.MP_VK.clearGameData();
     }
-    const keys = Object.keys(localStorage).filter(key => key === 'mp2' || key.startsWith('mp2_'));
+    const keys = Object.keys(localStorage).filter(key => key === 'mp2' || key === 'mp2snd' || key.startsWith('mp2_'));
     keys.forEach(key => localStorage.removeItem(key));
     M(`<h2>Готово</h2><p>Игровые данные на этом устройстве очищены.${window.MP_VK && window.MP_VK.state.available ? ' Сохранения VK Storage также очищены.' : ' Облачная копия VK не затронута. Для её очистки откройте игру внутри VK и повторите сброс.'}</p><button class="b" onclick="location.reload()">Продолжить</button>`);
   } catch(error) {
