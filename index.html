@@ -353,6 +353,39 @@ nav .on{color:#79551f;font-weight:800}
       const result = await send('VKWebAppShowNativeAds', { ad_format: 'interstitial' });
       return !!result.result;
     },
+    clearGameData: async () => {
+      if (!state.available || !state.initialized) throw new Error('Откройте игру внутри VK и дождитесь подключения сохранений.');
+      clearTimeout(syncTimer);
+      pending.clear();
+      if (flushPromise) await flushPromise;
+      state.syncing = true;
+      state.syncStatus = 'Очистка сохранений VK…';
+      try {
+        const keys = [];
+        let offset = 0;
+        while (true) {
+          const response = await send('VKWebAppStorageGetKeys', { count: 1000, offset });
+          const page = Array.isArray(response.keys) ? response.keys : [];
+          keys.push(...page.filter(key => typeof key === 'string' && (key === 'mp2' || key.startsWith('mp2_') || key.startsWith('mp2sync_'))));
+          if (page.length < 1000) break;
+          offset += page.length;
+        }
+        for (let i = 0; i < keys.length; i += 10) {
+          await Promise.all(keys.slice(i, i + 10).map(key => send('VKWebAppStorageSet', { key, value: '' })));
+        }
+        state.remoteMeta = null;
+        state.lastSyncAt = Date.now();
+        state.syncError = null;
+        state.syncStatus = 'Сохранения VK очищены';
+        return { cleared: true, keys: keys.length };
+      } catch (error) {
+        state.syncError = String(error && error.message || error);
+        state.syncStatus = 'Не удалось очистить VK Storage';
+        throw error;
+      } finally {
+        state.syncing = false;
+      }
+    },
     storageGet: async keys => send('VKWebAppStorageGet', { keys: Array.isArray(keys) ? keys : [keys] }),
     storageSet: async (key,value) => send('VKWebAppStorageSet', { key, value: String(value) })
   };
@@ -436,7 +469,20 @@ ex(){M(`<h2>Копия</h2><p class="mu">Скопируйте текст и со
 im(){M(`<h2>Восстановить</h2><textarea id="bi" placeholder="Вставьте текст копии"></textarea><button class="b" onclick="A.im2()">Проверить</button>`)},
 im2(){try{const o=JSON.parse($('#bi').value);if(o.v!==2||!Array.isArray(o.n)||!Array.isArray(o.tk)||!o.dk||!Array.isArray(o.hist))throw 0;PI=o;M(`<h2>Заменить данные?</h2><p>Билетов: ${o.tk.length}<br>Событий: ${o.hist.length}<br>Достижений: ${(o.ach||[]).length}</p><p class="mu">Текущие данные сначала сохранятся во временную копию.</p><button class="b" onclick="A.im3()">Восстановить</button><button class="b s" onclick="M()">Отмена</button>`)}catch(e){toast('Файл повреждён. Данные не изменены.')}},
 im3(){try{localStorage.setItem(KEY+'_tmp',JSON.stringify(S))}catch(e){}S=Object.assign(DEF(),PI);save();M();tab='home';go()},
-rst(){M(`<h2>Удалить всё?</h2><p>Партия, очки, статистика, история, достижения, колоды и билеты будут удалены.</p><button class="b c" onclick="S=DEF();save();M();tab='home';go()">Удалить всё</button><button class="b s" onclick="M()">Отмена</button>`)}};
+rst(){M(`<h2>Удалить все игровые данные?</h2><p>Будут сброшены все пять режимов, игровые имена, очки, история, билеты, достижения, настройки звука и сохранения колод.</p><p class="mu">Если вы открыли игру внутри VK, данные также будут очищены в VK Storage. В обычном браузере очистится только это устройство; для очистки облачной копии повторите действие внутри VK.</p><button class="b c" onclick="A.rstConfirm()">Подтвердить удаление</button><button class="b s" onclick="M()">Отмена</button>`)},
+async rstConfirm(){
+  M(`<h2>Удаляем сохранения…</h2><p class="mu">Пожалуйста, не закрывайте игру.</p>`);
+  try {
+    if (window.MP_VK && window.MP_VK.state.available) {
+      await window.MP_VK.clearGameData();
+    }
+    const keys = Object.keys(localStorage).filter(key => key === 'mp2' || key.startsWith('mp2_'));
+    keys.forEach(key => localStorage.removeItem(key));
+    M(`<h2>Готово</h2><p>Игровые данные на этом устройстве очищены.${window.MP_VK && window.MP_VK.state.available ? ' Сохранения VK Storage также очищены.' : ' Облачная копия VK не затронута. Для её очистки откройте игру внутри VK и повторите сброс.'}</p><button class="b" onclick="location.reload()">Продолжить</button>`);
+  } catch(error) {
+    M(`<h2>Не удалось завершить удаление</h2><p class="mu">Сохранения на устройстве не удалены, чтобы VK не восстановил старые данные. Откройте игру внутри VK, проверьте подключение и повторите попытку.</p><p class="mu">${E(String(error && error.message || error))}</p><button class="b" onclick="M()">Понятно</button>`);
+  }
+}};
 const tools=()=>`<div class="r2"><button class="b s" onclick="A.skip()">Пропустить без штрафа</button>${S.g.rep?'':'<button class="b s" onclick="A.rep()">Заменить карту</button>'}</div>`;
 const em=i=>`<svg class="em" viewBox="0 0 100 100"><use href="#${i?'lion':'lioness'}"/></svg>`,fmt=n=>String(n/60|0).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
 const BK=`<svg class="bk" viewBox="0 0 300 440"><rect width="300" height="440" rx="14" fill="#0f1730"/><rect x="14" y="14" width="272" height="412" rx="5" fill="url(#dm)" stroke="#cf9a52" stroke-width="1.6"/><rect x="60" y="34" width="180" height="42" fill="#0f1730"/><rect x="60" y="366" width="180" height="42" fill="#0f1730"/><g fill="#cf9a52" font-family="system-ui,sans-serif" font-size="30" font-weight="300" text-anchor="middle"><text x="150" y="64" textLength="170">МАМЧКИН</text><text x="150" y="396" textLength="170">ПАПЧКИН</text></g><svg x="24" y="91" width="252" height="261" viewBox="0 0 600 611"><use href="#emb"/></svg></svg>`;
