@@ -366,7 +366,7 @@ nav .on{color:#79551f;font-weight:800}
         while (true) {
           const response = await send('VKWebAppStorageGetKeys', { count: 1000, offset });
           const page = Array.isArray(response.keys) ? response.keys : [];
-          keys.push(...page.filter(key => typeof key === 'string' && (key === 'mp2' || key.startsWith('mp2_') || key.startsWith('mp2sync_'))));
+          keys.push(...page.filter(key => typeof key === 'string' && (key === 'mp2' || key === 'mp2snd' || key.startsWith('mp2_') || key.startsWith('mp2sync_'))));
           if (page.length < 1000) break;
           offset += page.length;
         }
