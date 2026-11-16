@@ -476,6 +476,7 @@ async rstConfirm(){
     if (window.MP_VK && window.MP_VK.state.available) {
       await window.MP_VK.clearGameData();
     }
+    window.__MP_RESETTING = true;
     const keys = Object.keys(localStorage).filter(key => key === 'mp2' || key === 'mp2snd' || key.startsWith('mp2_'));
     keys.forEach(key => localStorage.removeItem(key));
     M(`<h2>Готово</h2><p>Игровые данные на этом устройстве очищены.${window.MP_VK && window.MP_VK.state.available ? ' Сохранения VK Storage также очищены.' : ' Облачная копия VK не затронута. Для её очистки откройте игру внутри VK и повторите сброс.'}</p><button class="b" onclick="location.reload()">Продолжить</button>`);
@@ -853,7 +854,7 @@ function reloadSavedState(){
   TM=tmRead('team',tmDefaults);SC=tmRead('secret',scDefaults);
   try{Object.assign(AU,JSON.parse(localStorage.getItem('mp2snd')||'{}'))}catch(e){}
 }
-addEventListener('pagehide',()=>{mstop();save()});document.addEventListener('visibilitychange',()=>{if(document.hidden){mstop();if(AU.ctx){try{AU.ctx.suspend()}catch(e){}}return}if(AU.ctx){try{AU.ctx.resume()}catch(e){}}tick()});document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))sfx('click')});
+addEventListener('pagehide',()=>{mstop();if(!window.__MP_RESETTING)save()});document.addEventListener('visibilitychange',()=>{if(document.hidden){mstop();if(AU.ctx){try{AU.ctx.suspend()}catch(e){}}return}if(AU.ctx){try{AU.ctx.resume()}catch(e){}}tick()});document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))sfx('click')});
 MP_VK.boot().finally(()=>{
   reloadSavedState();
   MP_VK.installPersistence();
