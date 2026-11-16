@@ -152,195 +152,35 @@ nav .on{color:#79551f;font-weight:800}
 </style></head><body><svg width="0" height="0" style="position:absolute"><defs><pattern id="dm" width="26" height="44" patternUnits="userSpaceOnUse"><path d="M13 0L26 22 13 44 0 22ZM13 9L20 22 13 35 6 22Z" fill="none" stroke="#cf9a52" stroke-width=".6" opacity=".6"/></pattern><image id="emb" width="600" height="611" href="emblem.png"/><symbol id="lion" viewBox="0 0 300 336"><use href="#emb"/></symbol><symbol id="lioness" viewBox="300 0 300 336"><use href="#emb"/></symbol></defs></svg><div id="app"><header><svg class="em" viewBox="0 0 100 100"><use href="#lion"/></svg><h1>Мамчкин и Папчкин</h1><svg class="em" viewBox="0 0 100 100"><use href="#lioness"/></svg><button class="gear" id="sb" aria-label="Звук" onclick="A.mt()">🔊</button><button class="gear" style="margin-left:0" aria-label="Настройки" onclick="A.set()">⚙</button></header><div id="v"></div></div><nav id="nav"></nav><div id="m"></div>
 <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
 <script>
-/* VK Bridge: запуск, пользовательское облачное сохранение и рекламные методы. */
+/* VK Bridge: инициализация приложения и рекламные методы. Игровые данные хранятся только локально. */
 (function(){
   const bridge = window.vkBridge;
-  const KEYS = ['mp2','mp2_wait','mp2_mem','mp2_team','mp2_secret','mp2snd'];
-  const META_KEY = 'mp2sync_meta';
-  const CHUNK_BYTES = 2700;
   const state = {
     available: (() => { try { return !!(bridge && typeof bridge.send === 'function' && typeof bridge.isWebView === 'function' && bridge.isWebView()); } catch (error) { return false; } })(),
     initialized: false,
-    syncing: false,
-    syncStatus: 'Локальное сохранение',
-    syncError: null,
-    error: null,
-    lastSyncAt: null,
-    remoteMeta: null
+    error: null
   };
   const send = async (method, params) => {
     if (!state.available) throw new Error('VK Bridge недоступен. Открой приложение внутри VK.');
     return bridge.send(method, params || {});
   };
-  const readMany = async keys => {
-    const values = {};
-    for (let i=0;i<keys.length;i+=10) {
-      const response = await send('VKWebAppStorageGet', { keys: keys.slice(i,i+10) });
-      (response.keys || []).forEach(item => { values[item.key] = item.value || ''; });
-    }
-    return values;
-  };
-  const encodeChunks = value => {
-    const bytes = new TextEncoder().encode(value);
-    const chunks = [];
-    for (let i=0;i<bytes.length;i+=CHUNK_BYTES) {
-      const part = bytes.subarray(i, i+CHUNK_BYTES);
-      let binary = '';
-      for (let j=0;j<part.length;j++) binary += String.fromCharCode(part[j]);
-      chunks.push(btoa(binary));
-    }
-    return chunks.length ? chunks : [''];
-  };
-  const decodeChunks = chunks => {
-    const bytes = [];
-    chunks.forEach(chunk => {
-      const binary = atob(chunk);
-      for (let i=0;i<binary.length;i++) bytes.push(binary.charCodeAt(i));
-    });
-    return new TextDecoder().decode(new Uint8Array(bytes));
-  };
-  const chunkKey = (key, slot, index) => 'mp2sync_' + key + '_' + slot + '_' + index;
-  const loadRemote = async () => {
-    const metaValue = (await readMany([META_KEY]))[META_KEY];
-    if (!metaValue) return null;
-    const meta = JSON.parse(metaValue);
-    if (!meta || meta.v !== 1 || !meta.keys) return null;
-    const requests = [];
-    Object.entries(meta.keys).forEach(([key, info]) => {
-      for (let i=0;i<info.count;i++) requests.push([key,info.slot||0,i,chunkKey(key,info.slot||0,i)]);
-    });
-    const raw = await readMany(requests.map(x=>x[3]));
-    const values = {};
-    Object.entries(meta.keys).forEach(([key, info]) => {
-      const chunks = [];
-      for (let i=0;i<info.count;i++) {
-        const value = raw[chunkKey(key,info.slot||0,i)];
-        if (typeof value !== 'string' || !value) return;
-        chunks.push(value);
-      }
-      try { values[key] = decodeChunks(chunks); } catch (error) { /* повреждённый блок не заменяет локальные данные */ }
-    });
-    return { meta, values };
-  };
-  const writeRemote = async (values, baseMeta, revision) => {
-    const next = {
-      v: 1,
-      rev: revision,
-      keys: Object.assign({}, baseMeta && baseMeta.keys || {})
-    };
-    for (const [key,value] of Object.entries(values)) {
-      const chunks = encodeChunks(value);
-      const previous = next.keys[key];
-      const slot = previous ? 1-(previous.slot||0) : 0;
-      for (let i=0;i<chunks.length;i++) {
-        await send('VKWebAppStorageSet', { key: chunkKey(key,slot,i), value: chunks[i] });
-      }
-      next.keys[key] = { rev: revision, count: chunks.length, slot };
-    }
-    await send('VKWebAppStorageSet', { key: META_KEY, value: JSON.stringify(next) });
-    state.remoteMeta = next;
-    state.lastSyncAt = Date.now();
-    state.syncError = null;
-  };
-  const localRevision = () => Number(localStorage.getItem('mp2_sync_rev') || 0) || 0;
   const boot = async () => {
     if (!state.available) return false;
-    state.syncing = true;
-    state.syncStatus = 'Подключение к VK…';
     try {
       await send('VKWebAppInit');
       state.initialized = true;
       state.error = null;
-      state.syncStatus = 'Проверка сохранений…';
-      const remote = await loadRemote();
-      state.remoteMeta = remote && remote.meta || null;
-      const localRev = localRevision();
-      const remoteRev = remote && Number(remote.meta.rev) || 0;
-      const hasLocal = KEYS.some(key => localStorage.getItem(key) !== null);
-      if (remote && (remoteRev > localRev || !hasLocal)) {
-        Object.entries(remote.values).forEach(([key,value]) => {
-          if (KEYS.includes(key)) localStorage.setItem(key,value);
-        });
-        localStorage.setItem('mp2_sync_rev',String(remoteRev));
-      } else if (!remote || localRev > remoteRev) {
-        const local = {};
-        KEYS.forEach(key => {
-          const value = localStorage.getItem(key);
-          if (value !== null) local[key] = value;
-        });
-        if (Object.keys(local).length) {
-          const rev = Math.max(localRev,remoteRev)+1;
-          localStorage.setItem('mp2_sync_rev',String(rev));
-          await writeRemote(local,remote && remote.meta,rev);
-        }
-      }
-      state.syncStatus = 'Сохранения синхронизированы с VK';
       return true;
     } catch (error) {
       state.error = String(error && error.message || error);
-      state.syncError = state.error;
-      state.syncStatus = 'VK недоступен — используем локальные сохранения';
       return false;
-    } finally {
-      state.syncing = false;
     }
   };
-  let pending = new Set(), syncTimer = null, flushPromise = null;
-  const flush = async () => {
-    if (!state.initialized || !pending.size) return flushPromise || false;
-    if (flushPromise) return flushPromise;
-    const keys = Array.from(pending);
-    pending.clear();
-    const values = {};
-    keys.forEach(key => {
-      const value = localStorage.getItem(key);
-      if (value !== null) values[key] = value;
-    });
-    if (!Object.keys(values).length) return false;
-    const revision = Math.max(localRevision(),Number(state.remoteMeta && state.remoteMeta.rev)||0)+1;
-    localStorage.setItem('mp2_sync_rev',String(revision));
-    state.syncing = true;
-    state.syncStatus = 'Синхронизация с VK…';
-    flushPromise = writeRemote(values,state.remoteMeta,revision).then(() => {
-      state.syncStatus = 'Сохранения синхронизированы с VK';
-      return true;
-    }).catch(error => {
-      state.syncError = String(error && error.message || error);
-      state.syncStatus = 'Не удалось синхронизировать — данные остались на устройстве';
-      keys.forEach(key => pending.add(key));
-      return false;
-    }).finally(() => {
-      state.syncing = false;
-      flushPromise = null;
-      if (pending.size) scheduleFlush();
-    });
-    return flushPromise;
-  };
-  function scheduleFlush() {
-    clearTimeout(syncTimer);
-    syncTimer = setTimeout(flush,800);
-  }
-  const installPersistence = () => {
-    if (!state.initialized || window.__MP_VK_STORAGE_PATCHED) return;
-    const originalSetItem = Storage.prototype.setItem;
-    Storage.prototype.setItem = function(key,value) {
-      originalSetItem.call(this,key,value);
-      if (this === window.localStorage && KEYS.includes(String(key))) {
-        pending.add(String(key));
-        scheduleFlush();
-      }
-    };
-    window.__MP_VK_STORAGE_PATCHED = true;
-    window.addEventListener('pagehide',() => { if(pending.size) flush(); });
-  };
-  const api = {
+  window.MP_VK = {
     state,
     isAvailable: () => state.available,
     init: boot,
     boot,
-    installPersistence,
-    flush,
-    getUserInfo: () => send('VKWebAppGetUserInfo'),
     checkRewarded: async () => {
       const result = await send('VKWebAppCheckNativeAds', { ad_format: 'reward' });
       return !!result.result;
@@ -352,44 +192,8 @@ nav .on{color:#79551f;font-weight:800}
     showInterstitial: async () => {
       const result = await send('VKWebAppShowNativeAds', { ad_format: 'interstitial' });
       return !!result.result;
-    },
-    clearGameData: async () => {
-      if (!state.available || !state.initialized) throw new Error('Откройте игру внутри VK и дождитесь подключения сохранений.');
-      clearTimeout(syncTimer);
-      pending.clear();
-      if (flushPromise) await flushPromise;
-      state.syncing = true;
-      state.syncStatus = 'Очистка сохранений VK…';
-      try {
-        const keys = [];
-        let offset = 0;
-        while (true) {
-          const response = await send('VKWebAppStorageGetKeys', { count: 1000, offset });
-          const page = Array.isArray(response.keys) ? response.keys : [];
-          keys.push(...page.filter(key => typeof key === 'string' && (key === 'mp2' || key === 'mp2snd' || key.startsWith('mp2_') || key.startsWith('mp2sync_'))));
-          if (page.length < 1000) break;
-          offset += page.length;
-        }
-        for (let i = 0; i < keys.length; i += 10) {
-          await Promise.all(keys.slice(i, i + 10).map(key => send('VKWebAppStorageSet', { key, value: '' })));
-        }
-        state.remoteMeta = null;
-        state.lastSyncAt = Date.now();
-        state.syncError = null;
-        state.syncStatus = 'Сохранения VK очищены';
-        return { cleared: true, keys: keys.length };
-      } catch (error) {
-        state.syncError = String(error && error.message || error);
-        state.syncStatus = 'Не удалось очистить VK Storage';
-        throw error;
-      } finally {
-        state.syncing = false;
-      }
-    },
-    storageGet: async keys => send('VKWebAppStorageGet', { keys: Array.isArray(keys) ? keys : [keys] }),
-    storageSet: async (key,value) => send('VKWebAppStorageSet', { key, value: String(value) })
+    }
   };
-  window.MP_VK = api;
 })();
 </script>
 <script>
@@ -462,27 +266,20 @@ ab(id){const a=S.ab.find(x=>x.id==id),el=S.tk.filter(t=>t.w==a.w&&t.s=='a'&&dkey
  M(`<h2>${E(card(a.c).title)}</h2><p class="mu">Выберите билет. Срочный уход и безопасность способность не отменяет.</p>${el.map(t=>`<button class="b s" onclick="A.cf(${a.id},${t.id})">${E(card(t.c).title)}</button>`).join('')}`)},
 cf(a,t){M(`<h2>Отменить билет?</h2><p>«${E(card(T(t).c).title)}»</p><button class="b" onclick="A.cn(${a},${t})">Подтвердить отмену</button><button class="b s" onclick="M()">Назад</button>`)},
 cn(a,t){const ab=S.ab.find(x=>x.id==a),k=T(t);if(!ab.ok||k.s!='a')return;ab.ok=0;k.s='x';tl(k,'отменён: '+card(ab.c).title);S.sd[ab.w].im++;log(card(ab.c).title,ab.w,'Отменён билет «'+card(k.c).title+'»');chk();save();M();go()},
-set(){M(`<h2>Настройки</h2><p class="mu">Сохранение: ${E(window.MP_VK.state.syncStatus)}</p>${[0,1].map(i=>`<input id="n${i}" value="${E(S.n[i])}">`).join('')}<p class="mu">Срок билета по умолчанию, дней (1–14)</p><input id="dd" type="number" min="1" max="14" value="${S.days}"><button class="b" onclick="A.sn()">Сохранить</button>${S.comps.length?'<p class="mu">Свои компенсации</p>':''}${S.comps.map((x,i)=>`<div class="r2"><span>${E(x)}</span><button class="b s sm" onclick="A.ce(${i})">✎</button><button class="b s sm" onclick="S.comps.splice(${i},1);save();A.set()">✕</button></div>`).join('')}<h2>Звук и музыка</h2><label class="mu"><input type="checkbox" style="width:auto" ${AU.mus?'checked':''} onchange="A.sd('mus',this.checked?1:0)"> Фоновая музыка</label><br><label class="mu"><input type="checkbox" style="width:auto" ${AU.fx?'checked':''} onchange="A.sd('fx',this.checked?1:0)"> Звуковые эффекты</label><p class="mu">Громкость музыки</p><input type="range" min="0" max="1" step=".05" value="${AU.mv}" oninput="A.sd('mv',+this.value)"><p class="mu">Громкость эффектов</p><input type="range" min="0" max="1" step=".05" value="${AU.fv}" oninput="A.sd('fv',+this.value)"><div class="r2"><button class="b s" onclick="A.ex()">Сохранить копию</button><button class="b s" onclick="A.im()">Восстановить</button></div><button class="b s" onclick="if(confirm('Очки обнулятся, история, билеты и достижения сохранятся.')){A.ng();M();tab='home';go()}">Новая партия</button><button class="b c" onclick="A.rst()">Полностью сбросить игру</button>`)},
+set(){M(`<h2>Настройки</h2><p class="mu">Сохранение: только на этом устройстве</p>${[0,1].map(i=>`<input id="n${i}" value="${E(S.n[i])}">`).join('')}<p class="mu">Срок билета по умолчанию, дней (1–14)</p><input id="dd" type="number" min="1" max="14" value="${S.days}"><button class="b" onclick="A.sn()">Сохранить</button>${S.comps.length?'<p class="mu">Свои компенсации</p>':''}${S.comps.map((x,i)=>`<div class="r2"><span>${E(x)}</span><button class="b s sm" onclick="A.ce(${i})">✎</button><button class="b s sm" onclick="S.comps.splice(${i},1);save();A.set()">✕</button></div>`).join('')}<h2>Звук и музыка</h2><label class="mu"><input type="checkbox" style="width:auto" ${AU.mus?'checked':''} onchange="A.sd('mus',this.checked?1:0)"> Фоновая музыка</label><br><label class="mu"><input type="checkbox" style="width:auto" ${AU.fx?'checked':''} onchange="A.sd('fx',this.checked?1:0)"> Звуковые эффекты</label><p class="mu">Громкость музыки</p><input type="range" min="0" max="1" step=".05" value="${AU.mv}" oninput="A.sd('mv',+this.value)"><p class="mu">Громкость эффектов</p><input type="range" min="0" max="1" step=".05" value="${AU.fv}" oninput="A.sd('fv',+this.value)"><div class="r2"><button class="b s" onclick="A.ex()">Сохранить копию</button><button class="b s" onclick="A.im()">Восстановить</button></div><button class="b s" onclick="if(confirm('Очки обнулятся, история, билеты и достижения сохранятся.')){A.ng();M();tab='home';go()}">Новая партия</button><button class="b c" onclick="A.rst()">Полностью сбросить игру</button>`)},
 sn(){S.n=[$('#n0').value.trim()||'Мамчкин',$('#n1').value.trim()||'Папчкин'];S.days=Math.min(14,Math.max(1,+$('#dd').value||7));save();M();go()},
 ce(i){const v=prompt('Изменить',S.comps[i]);if(v&&v.trim()){S.comps[i]=v.trim();save();A.set()}},
 ex(){M(`<h2>Копия</h2><p class="mu">Скопируйте текст и сохраните в заметках или мессенджере.</p><textarea id="bx" readonly>${E(JSON.stringify(S))}</textarea><button class="b" onclick="$('#bx').select();document.execCommand('copy');toast('Скопировано')">Копировать</button>`)},
 im(){M(`<h2>Восстановить</h2><textarea id="bi" placeholder="Вставьте текст копии"></textarea><button class="b" onclick="A.im2()">Проверить</button>`)},
 im2(){try{const o=JSON.parse($('#bi').value);if(o.v!==2||!Array.isArray(o.n)||!Array.isArray(o.tk)||!o.dk||!Array.isArray(o.hist))throw 0;PI=o;M(`<h2>Заменить данные?</h2><p>Билетов: ${o.tk.length}<br>Событий: ${o.hist.length}<br>Достижений: ${(o.ach||[]).length}</p><p class="mu">Текущие данные сначала сохранятся во временную копию.</p><button class="b" onclick="A.im3()">Восстановить</button><button class="b s" onclick="M()">Отмена</button>`)}catch(e){toast('Файл повреждён. Данные не изменены.')}},
 im3(){try{localStorage.setItem(KEY+'_tmp',JSON.stringify(S))}catch(e){}S=Object.assign(DEF(),PI);save();M();tab='home';go()},
-rst(){M(`<h2>Удалить все игровые данные?</h2><p>Будут сброшены все пять режимов, игровые имена, очки, история, билеты, достижения, настройки звука и сохранения колод.</p><p class="mu">Если вы открыли игру внутри VK, данные также будут очищены в VK Storage. В обычном браузере очистится только это устройство; для очистки облачной копии повторите действие внутри VK.</p><button class="b c" onclick="A.rstConfirm()">Подтвердить удаление</button><button class="b s" onclick="M()">Отмена</button>`)},
+rst(){M(`<h2>Удалить все игровые данные?</h2><p>Будут сброшены все пять режимов, игровые имена, очки, история, билеты, достижения, настройки звука и сохранения колод.</p><p class="mu">Сохранения хранятся только на этом устройстве. При очистке данных браузера или смене устройства прогресс может потеряться.</p><button class="b c" onclick="A.rstConfirm()">Подтвердить удаление</button><button class="b s" onclick="M()">Отмена</button>`)},
 async rstConfirm(){
   M(`<h2>Удаляем сохранения…</h2><p class="mu">Пожалуйста, не закрывайте игру.</p>`);
-  try {
-    if (window.MP_VK && window.MP_VK.state.available) {
-      await window.MP_VK.clearGameData();
-    }
-    window.__MP_RESETTING = true;
-    const keys = Object.keys(localStorage).filter(key => key === 'mp2' || key === 'mp2snd' || key.startsWith('mp2_'));
-    keys.forEach(key => localStorage.removeItem(key));
-    M(`<h2>Готово</h2><p>Игровые данные на этом устройстве очищены.${window.MP_VK && window.MP_VK.state.available ? ' Сохранения VK Storage также очищены.' : ' Облачная копия VK не затронута. Для её очистки откройте игру внутри VK и повторите сброс.'}</p><button class="b" onclick="location.reload()">Продолжить</button>`);
-  } catch(error) {
-    M(`<h2>Не удалось завершить удаление</h2><p class="mu">Сохранения на устройстве не удалены, чтобы VK не восстановил старые данные. Откройте игру внутри VK, проверьте подключение и повторите попытку.</p><p class="mu">${E(String(error && error.message || error))}</p><button class="b" onclick="M()">Понятно</button>`);
-  }
+  window.__MP_RESETTING = true;
+  const keys = Object.keys(localStorage).filter(key => key === 'mp2' || key === 'mp2snd' || key.startsWith('mp2_'));
+  keys.forEach(key => localStorage.removeItem(key));
+  M(`<h2>Готово</h2><p>Игровые данные на этом устройстве очищены.</p><button class="b" onclick="location.reload()">Продолжить</button>`);
 }};
 const tools=()=>`<div class="r2"><button class="b s" onclick="A.skip()">Пропустить без штрафа</button>${S.g.rep?'':'<button class="b s" onclick="A.rep()">Заменить карту</button>'}</div>`;
 const em=i=>`<svg class="em" viewBox="0 0 100 100"><use href="#${i?'lion':'lioness'}"/></svg>`,fmt=n=>String(n/60|0).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
@@ -857,7 +654,6 @@ function reloadSavedState(){
 addEventListener('pagehide',()=>{mstop();if(!window.__MP_RESETTING)save()});document.addEventListener('visibilitychange',()=>{if(document.hidden){mstop();if(AU.ctx){try{AU.ctx.suspend()}catch(e){}}return}if(AU.ctx){try{AU.ctx.resume()}catch(e){}}tick()});document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('button'))sfx('click')});
 MP_VK.boot().finally(()=>{
   reloadSavedState();
-  MP_VK.installPersistence();
   go();
   if(!S.ob)M(`<h2>Добро пожаловать</h2><p>Успех приносит очко и награду, неудача — карту заботы. Билеты хранят награды и задания, откуп и способности помогают договориться. Комфорт малыша всегда важнее игры.</p><button class="b" onclick="S.ob=1;save();M()">Начать</button><button class="b s" onclick="S.ob=1;save();M()">Пропустить</button>`);
   else if(S.g?.on&&S.g.c)M(`<h2>🦁 Босс вернулся!</h2><p>Мы сохранили твою игру. Продолжаем с того места, где остановились?</p><button class="b" onclick="AU.go=1;M();tab='game';go()">Продолжить игру</button><button class="b s" onclick="M()">На главную</button>`);
